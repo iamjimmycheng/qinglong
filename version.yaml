@@ -1,13 +1,9 @@
-version: 2.17.1
-changeLogLink: https://t.me/jiao_long/402
-publishTime: 2024-02-07 23:00
+version: 2.17.13
+changeLogLink: https://t.me/jiao_long/423
+publishTime: 2024-12-21 23:30
 changeLog: |
-  1. 系统设置增加重启
-  2. 修复 debian 系统内更新源代码分支错误
-  3. 修复启动时依赖配置未初始化
-  4. 修复未开启一言时多余空行, 通知渠道改发送前检查，感谢 https://github.com/Cp0204
-  5. Dockerfile 添加发布端口和数据卷 https://github.com/Akimio521
-  6. 修复有反向代理时脚本管理获取文件可能失败
-  7. 脚本管理重命名增加默认值，增加新建(mod+o)、删除快捷键(mod+d)
-  8. 修复对比工具保存文件
-  9. 其他 bug 修复
+  1. 新增 wxPusher 通知
+  2. 完善 pushplus 通知
+  3. 修复任务列表下次运行时间展示
+  4. 修复本地部署设置 dataPath 后，备份目录可能错误
+  5. h5 登录增加识别鸿蒙系统

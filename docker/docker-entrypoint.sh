@@ -1,11 +1,11 @@
 #!/bin/bash
 
 dir_shell=/ql/shell
-. $dir_shell/env.sh
 . $dir_shell/share.sh
-link_shell
+. $dir_shell/env.sh
 
 echo -e "======================1. 检测配置文件========================\n"
+import_config "$@"
 make_dir /etc/nginx/conf.d
 make_dir /run/nginx
 init_nginx
@@ -21,6 +21,7 @@ nginx -s reload 2>/dev/null || nginx -c /etc/nginx/nginx.conf
 echo -e "nginx启动成功...\n"
 
 echo -e "======================4. 启动pm2服务========================\n"
+reload_update
 reload_pm2
 
 if [[ $AutoStartBot == true ]]; then

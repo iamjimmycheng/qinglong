@@ -165,7 +165,10 @@ export default class DependenceService {
         pid && (await killTask(pid));
       }
     }
-    await this.removeDb(ids);
+    await DependenceModel.update(
+      { status: DependenceStatus.cancelled },
+      { where: { id: ids } },
+    );
   }
 
   private async find(query: any, sort: any = []): Promise<Dependence[]> {
@@ -180,7 +183,10 @@ export default class DependenceService {
     query: FindOptions<Dependence>['where'],
   ): Promise<Dependence> {
     const doc: any = await DependenceModel.findOne({ where: { ...query } });
-    return doc && (doc.get({ plain: true }) as Dependence);
+    if (!doc) {
+      throw new Error(`Dependency ${JSON.stringify(query)} not found`);
+    }
+    return doc.get({ plain: true });
   }
 
   private async updateLog(ids: number[], log: string): Promise<void> {
@@ -357,7 +363,17 @@ export default class DependenceService {
               ? DependenceStatus.installFailed
               : DependenceStatus.removeFailed;
           }
-          await DependenceModel.update({ status }, { where: { id: depIds } });
+          const docs = await DependenceModel.findAll({ where: { id: depIds } });
+          const _docIds = docs
+            .filter((x) => x.status !== DependenceStatus.cancelled)
+            .map((x) => x.id!);
+
+          if (_docIds.length > 0) {
+            await DependenceModel.update(
+              { status },
+              { where: { id: _docIds } },
+            );
+          }
 
           // 如果删除依赖成功或者强制删除
           if ((isSucceed || force) && !isInstall) {

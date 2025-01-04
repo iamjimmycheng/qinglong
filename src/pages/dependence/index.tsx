@@ -22,6 +22,7 @@ import {
   FileTextOutlined,
   CloseCircleOutlined,
   ClockCircleOutlined,
+  MinusCircleOutlined,
 } from '@ant-design/icons';
 import config from '@/utils/config';
 import { PageContainer } from '@ant-design/pro-layout';
@@ -38,6 +39,7 @@ import dayjs from 'dayjs';
 import WebSocketManager from '@/utils/websocket';
 import { DependenceStatus, Status } from './type';
 import IconFont from '@/components/iconfont';
+import useResizeObserver from '@react-hook/resize-observer';
 
 const { Text } = Typography;
 const { Search } = Input;
@@ -75,6 +77,10 @@ const StatusMap: Record<number, { icon: React.ReactNode; color: string }> = {
   },
   6: {
     icon: <ClockCircleOutlined />,
+    color: 'default',
+  },
+  7: {
+    icon: <MinusCircleOutlined />,
     color: 'default',
   },
 };
@@ -129,6 +135,10 @@ const Dependence = () => {
           text: intl.get('删除失败'),
           value: DependenceStatus.removeFailed,
         },
+        {
+          text: intl.get('已取消'),
+          value: DependenceStatus.cancelled,
+        },
       ],
       render: (text: string, record: any, index: number) => {
         return (
@@ -176,7 +186,7 @@ const Dependence = () => {
         const isPc = !isPhone;
         return (
           <Space size="middle">
-            {![Status.队列中].includes(record.status) && (
+            {![Status.队列中, Status.已取消].includes(record.status) && (
               <Tooltip title={isPc ? intl.get('日志') : ''}>
                 <a
                   onClick={() => {
@@ -187,7 +197,9 @@ const Dependence = () => {
                 </a>
               </Tooltip>
             )}
-            {[Status.队列中, Status.安装中, Status.删除中].includes(record.status) ? (
+            {[Status.队列中, Status.安装中, Status.删除中].includes(
+              record.status,
+            ) ? (
               <Tooltip title={isPc ? intl.get('取消安装') : ''}>
                 <a onClick={() => cancelDependence(record)}>
                   <IconFont type="ql-icon-quxiaoanzhuang" />
@@ -200,11 +212,13 @@ const Dependence = () => {
                     <BugOutlined />
                   </a>
                 </Tooltip>
-                <Tooltip title={isPc ? intl.get('删除') : ''}>
-                  <a onClick={() => deleteDependence(record, index)}>
-                    <DeleteOutlined />
-                  </a>
-                </Tooltip>
+                {Status.已安装 === record.status && (
+                  <Tooltip title={isPc ? intl.get('删除') : ''}>
+                    <a onClick={() => deleteDependence(record, index)}>
+                      <DeleteOutlined />
+                    </a>
+                  </Tooltip>
+                )}
                 <Tooltip title={isPc ? intl.get('强制删除') : ''}>
                   <a onClick={() => deleteDependence(record, index, true)}>
                     <DeleteFilled />
@@ -227,7 +241,19 @@ const Dependence = () => {
   const [isLogModalVisible, setIsLogModalVisible] = useState(false);
   const [type, setType] = useState('nodejs');
   const tableRef = useRef<HTMLDivElement>(null);
-  const tableScrollHeight = useTableScrollHeight(tableRef, 59);
+  const [height, setHeight] = useState<number>(0);
+
+  useResizeObserver(tableRef, (entry) => {
+    const _height =
+      entry.target?.parentElement?.parentElement?.parentElement?.offsetHeight;
+    let threshold = 113;
+    if (selectedRowIds.length) {
+      threshold += 53;
+    }
+    if (_height && height !== _height - threshold) {
+      setHeight(_height - threshold);
+    }
+  });
 
   const getDependencies = (status?: number[]) => {
     setLoading(true);
@@ -515,6 +541,56 @@ const Dependence = () => {
     setType(activeKey);
   };
 
+  const children = (
+    <div ref={tableRef}>
+      {selectedRowIds.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <Button
+            type="primary"
+            style={{ marginBottom: 5, marginLeft: 8 }}
+            onClick={() => handlereInstallDependencies()}
+          >
+            {intl.get('批量安装')}
+          </Button>
+          <Button
+            type="primary"
+            style={{ marginBottom: 5, marginLeft: 8 }}
+            onClick={() => delDependencies(false)}
+          >
+            {intl.get('批量删除')}
+          </Button>
+          <Button
+            type="primary"
+            style={{ marginBottom: 5, marginLeft: 8 }}
+            onClick={() => delDependencies(true)}
+          >
+            {intl.get('批量强制删除')}
+          </Button>
+          <span style={{ marginLeft: 8 }}>
+            {intl.get('已选择')}
+            <a>{selectedRowIds?.length}</a>
+            {intl.get('项')}
+          </span>
+        </div>
+      )}
+      <DndProvider backend={HTML5Backend}>
+        <Table
+          columns={columns}
+          rowSelection={rowSelection}
+          pagination={false}
+          dataSource={value}
+          rowKey="id"
+          size="middle"
+          scroll={{ x: 768, y: height }}
+          loading={loading}
+          onChange={(pagination, filters) => {
+            getDependencies(filters?.status as number[]);
+          }}
+        />
+      </DndProvider>
+    </div>
+  );
+
   return (
     <PageContainer
       className="ql-container-wrapper dependence-wrapper ql-container-wrapper-has-tab"
@@ -539,6 +615,7 @@ const Dependence = () => {
         defaultActiveKey="nodejs"
         size="small"
         tabPosition="top"
+        destroyInactiveTabPane
         onChange={onTabChange}
         items={[
           {
@@ -555,53 +632,7 @@ const Dependence = () => {
           },
         ]}
       />
-      <div ref={tableRef}>
-        {selectedRowIds.length > 0 && (
-          <div style={{ marginBottom: 16 }}>
-            <Button
-              type="primary"
-              style={{ marginBottom: 5, marginLeft: 8 }}
-              onClick={() => handlereInstallDependencies()}
-            >
-              {intl.get('批量安装')}
-            </Button>
-            <Button
-              type="primary"
-              style={{ marginBottom: 5, marginLeft: 8 }}
-              onClick={() => delDependencies(false)}
-            >
-              {intl.get('批量删除')}
-            </Button>
-            <Button
-              type="primary"
-              style={{ marginBottom: 5, marginLeft: 8 }}
-              onClick={() => delDependencies(true)}
-            >
-              {intl.get('批量强制删除')}
-            </Button>
-            <span style={{ marginLeft: 8 }}>
-              {intl.get('已选择')}
-              <a>{selectedRowIds?.length}</a>
-              {intl.get('项')}
-            </span>
-          </div>
-        )}
-        <DndProvider backend={HTML5Backend}>
-          <Table
-            columns={columns}
-            rowSelection={rowSelection}
-            pagination={false}
-            dataSource={value}
-            rowKey="id"
-            size="middle"
-            scroll={{ x: 768, y: tableScrollHeight }}
-            loading={loading}
-            onChange={(pagination, filters) => {
-              getDependencies(filters?.status as number[]);
-            }}
-          />
-        </DndProvider>
-      </div>
+      {children}
       <DependenceModal
         visible={isModalVisible}
         handleCancel={handleCancel}

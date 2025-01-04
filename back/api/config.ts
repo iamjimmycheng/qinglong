@@ -1,4 +1,3 @@
-import { getFileContentByName, getLastModifyFilePath } from '../config/util';
 import { Router, Request, Response, NextFunction } from 'express';
 import { Container } from 'typedi';
 import { Logger } from 'winston';
@@ -8,6 +7,7 @@ import { celebrate, Joi } from 'celebrate';
 import { join } from 'path';
 import { SAMPLE_FILES } from '../config/const';
 import ConfigService from '../services/config';
+import { writeFileWithLock } from '../shared/utils';
 const route = Router();
 
 export default (app: Router) => {
@@ -78,7 +78,7 @@ export default (app: Router) => {
         if (name.startsWith('data/scripts/')) {
           path = join(config.rootPath, name);
         }
-        await fs.writeFile(path, content);
+        await writeFileWithLock(path, content);
         res.send({ code: 200, message: '保存成功' });
       } catch (e) {
         return next(e);

@@ -10,6 +10,7 @@ import { load } from 'js-yaml';
 import config from './index';
 import { TASK_COMMAND } from './const';
 import Logger from '../loaders/logger';
+import { writeFileWithLock } from '../shared/utils';
 
 export * from './share';
 
@@ -30,7 +31,7 @@ export async function getLastModifyFilePath(dir: string) {
 
     arr.forEach(async (item) => {
       const fullpath = path.join(dir, item);
-      const stats = await fs.stat(fullpath);
+      const stats = await fs.lstat(fullpath);
       if (stats.isFile()) {
         if (stats.mtimeMs >= 0) {
           filePath = fullpath;
@@ -145,12 +146,14 @@ export function getPlatform(userAgent: string): 'mobile' | 'desktop' {
     system = 'android'; // android系统
   } else if (testUa(/ios|iphone|ipad|ipod|iwatch/g)) {
     system = 'ios'; // ios系统
+  } else if (testUa(/openharmony/g)) {
+    system = 'openharmony'; // openharmony系统
   }
 
   let platform = 'desktop';
   if (system === 'windows' || system === 'macos' || system === 'linux') {
     platform = 'desktop';
-  } else if (system === 'android' || system === 'ios' || testUa(/mobile/g)) {
+  } else if (system === 'android' || system === 'ios' || system === 'openharmony' || testUa(/mobile/g)) {
     platform = 'mobile';
   }
 
@@ -168,7 +171,7 @@ export async function fileExist(file: any) {
 
 export async function createFile(file: string, data: string = '') {
   await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, data);
+  await writeFileWithLock(file, data);
 }
 
 export async function handleLogPath(
@@ -257,7 +260,7 @@ export async function readDirs(
 
   for (const file of files) {
     const subPath = path.join(dir, file);
-    const stats = await fs.stat(subPath);
+    const stats = await fs.lstat(subPath);
     const key = path.join(relativePath, file);
 
     if (blacklist.includes(file) || stats.isSymbolicLink()) {
@@ -300,7 +303,7 @@ export async function readDir(
     .filter((x) => !blacklist.includes(x))
     .map(async (file: string) => {
       const subPath = path.join(dir, file);
-      const stats = await fs.stat(subPath);
+      const stats = await fs.lstat(subPath);
       const key = path.join(relativePath, file);
       return {
         title: file,
@@ -360,6 +363,35 @@ export function parseHeaders(headers: string) {
   return parsed;
 }
 
+function parseString(
+  input: string,
+  valueFormatFn?: (v: string) => string,
+): Record<string, string> {
+  const regex = /(\w+):\s*((?:(?!\n\w+:).)*)/g;
+  const matches: Record<string, string> = {};
+
+  let match;
+  while ((match = regex.exec(input)) !== null) {
+    const [, key, value] = match;
+    const _key = key.trim();
+    if (!_key || matches[_key]) {
+      continue;
+    }
+
+    let _value = value.trim();
+
+    try {
+      _value = valueFormatFn ? valueFormatFn(_value) : _value;
+      const jsonValue = JSON.parse(_value);
+      matches[_key] = jsonValue;
+    } catch (error) {
+      matches[_key] = _value;
+    }
+  }
+
+  return matches;
+}
+
 export function parseBody(
   body: string,
   contentType:
@@ -367,33 +399,13 @@ export function parseBody(
     | 'multipart/form-data'
     | 'application/x-www-form-urlencoded'
     | 'text/plain',
+  valueFormatFn?: (v: string) => string,
 ) {
   if (contentType === 'text/plain' || !body) {
-    return body;
+    return valueFormatFn && body ? valueFormatFn(body) : body;
   }
 
-  const parsed: any = {};
-  let key;
-  let val;
-  let i;
-
-  body &&
-    body.split('\n').forEach(function parser(line) {
-      i = line.indexOf(':');
-      key = line.substring(0, i).trim();
-      val = line.substring(i + 1).trim();
-
-      if (!key || parsed[key]) {
-        return;
-      }
-
-      try {
-        const jsonValue = JSON.parse(val);
-        parsed[key] = jsonValue;
-      } catch (error) {
-        parsed[key] = val;
-      }
-    });
+  const parsed = parseString(body, valueFormatFn);
 
   switch (contentType) {
     case 'multipart/form-data':
@@ -452,7 +464,7 @@ export async function parseVersion(path: string): Promise<IVersion> {
   return load(await fs.readFile(path, 'utf8')) as IVersion;
 }
 
-export async function parseContentVersion(content: string): Promise<IVersion> {
+export function parseContentVersion(content: string): IVersion {
   return load(content) as IVersion;
 }
 
@@ -460,13 +472,18 @@ export async function getUniqPath(
   command: string,
   id: string,
 ): Promise<string> {
+  let suffix = '';
   if (/^\d+$/.test(id)) {
-    id = `_${id}`;
-  } else {
-    id = '';
+    suffix = `_${id}`;
   }
 
-  const items = command.split(/ +/);
+  let items = command.split(/ +/);
+
+  const maxTimeCommandIndex = items.findIndex((x) => x === '-m');
+  if (maxTimeCommandIndex !== -1) {
+    items = items.slice(maxTimeCommandIndex + 2);
+  }
+
   let str = items[0];
   if (items[0] === TASK_COMMAND) {
     str = items[1];
@@ -490,7 +507,7 @@ export async function getUniqPath(
     str = `${tempStr}_${str.slice(slashIndex + 1)}`;
   }
 
-  return `${str}${id}`;
+  return `${str}${suffix}`;
 }
 
 export function safeJSONParse(value?: string) {

@@ -1,20 +1,13 @@
+import { spawn } from 'cross-spawn';
 import { Response } from 'express';
-import { Service, Inject } from 'typedi';
+import fs from 'fs';
+import got from 'got';
+import sum from 'lodash/sum';
+import path from 'path';
+import { Inject, Service } from 'typedi';
 import winston from 'winston';
 import config from '../config';
-import {
-  AuthDataType,
-  AuthInfo,
-  SystemInstance,
-  SystemModel,
-  SystemModelInfo,
-} from '../data/system';
-import { NotificationInfo } from '../data/notify';
-import NotificationService from './notify';
-import ScheduleService, { TaskCallbacks } from './schedule';
-import { spawn } from 'cross-spawn';
-import SockService from './sock';
-import got from 'got';
+import { TASK_COMMAND } from '../config/const';
 import {
   getPid,
   killTask,
@@ -22,14 +15,27 @@ import {
   parseVersion,
   promiseExec,
   readDirs,
+  rmPath,
 } from '../config/util';
-import { TASK_COMMAND } from '../config/const';
+import {
+  DependenceModel,
+  DependenceStatus,
+  DependenceTypes,
+} from '../data/dependence';
+import { NotificationInfo } from '../data/notify';
+import {
+  AuthDataType,
+  SystemInfo,
+  SystemInstance,
+  SystemModel,
+  SystemModelInfo,
+} from '../data/system';
 import taskLimit from '../shared/pLimit';
-import tar from 'tar';
-import path from 'path';
-import fs from 'fs';
-import sum from 'lodash/sum';
-import { DependenceModel, DependenceStatus, DependenceTypes } from '../data/dependence';
+import NotificationService from './notify';
+import ScheduleService, { TaskCallbacks } from './schedule';
+import SockService from './sock';
+import os from 'os';
+import dayjs from 'dayjs';
 
 @Service()
 export default class SystemService {
@@ -44,18 +50,22 @@ export default class SystemService {
 
   public async getSystemConfig() {
     const doc = await this.getDb({ type: AuthDataType.systemConfig });
-    return doc || ({} as SystemInstance);
-  }
-
-  private async updateAuthDb(payload: AuthInfo): Promise<SystemInstance> {
-    await SystemModel.upsert({ ...payload });
-    const doc = await this.getDb({ type: payload.type });
     return doc;
   }
 
-  public async getDb(query: any): Promise<SystemInstance> {
-    const doc: any = await SystemModel.findOne({ where: { ...query } });
-    return doc && doc.get({ plain: true });
+  private async updateAuthDb(payload: SystemInfo): Promise<SystemInfo> {
+    const { id, ...others } = payload;
+    await SystemModel.update(others, { where: { id } });
+    const doc = await this.getDb({ id });
+    return doc;
+  }
+
+  public async getDb(query: any): Promise<SystemInfo> {
+    const doc = await SystemModel.findOne({ where: query });
+    if (!doc) {
+      throw new Error(`System ${JSON.stringify(query)} not found`);
+    }
+    return doc.get({ plain: true });
   }
 
   public async updateNotificationMode(notificationInfo: NotificationInfo) {
@@ -83,17 +93,22 @@ export default class SystemService {
       info: { ...oDoc.info, ...info },
     });
     const cron = {
-      id: result.id || NaN,
+      id: result.id as number,
       name: '删除日志',
       command: `ql rmlog ${info.logRemoveFrequency}`,
+      runOrigin: 'system' as const,
     };
     if (oDoc.info?.logRemoveFrequency) {
       await this.scheduleService.cancelIntervalTask(cron);
     }
     if (info.logRemoveFrequency && info.logRemoveFrequency > 0) {
-      this.scheduleService.createIntervalTask(cron, {
-        days: info.logRemoveFrequency,
-      });
+      this.scheduleService.createIntervalTask(
+        cron,
+        {
+          days: info.logRemoveFrequency,
+        },
+        true,
+      );
     }
     return { code: 200, data: info };
   }
@@ -139,7 +154,10 @@ export default class SystemService {
     }
     let command = `cd && ${cmd}`;
     const docs = await DependenceModel.findAll({
-      where: { type: DependenceTypes.nodejs, status: DependenceStatus.installed },
+      where: {
+        type: DependenceTypes.nodejs,
+        status: DependenceStatus.installed,
+      },
     });
     if (docs.length > 0) {
       command += ` && pnpm i -g`;
@@ -166,6 +184,8 @@ export default class SystemService {
       },
       {
         command,
+        id: 'update-node-mirror',
+        runOrigin: 'system',
       },
     );
   }
@@ -196,6 +216,9 @@ export default class SystemService {
     });
     let defaultDomain = 'https://dl-cdn.alpinelinux.org';
     let targetDomain = 'https://dl-cdn.alpinelinux.org';
+    if (os.platform() !== 'linux') {
+      return;
+    }
     const content = await fs.promises.readFile('/etc/apk/repositories', {
       encoding: 'utf-8',
     });
@@ -237,6 +260,8 @@ export default class SystemService {
       },
       {
         command,
+        id: 'update-linux-mirror',
+        runOrigin: 'system',
       },
     );
   }
@@ -253,7 +278,7 @@ export default class SystemService {
             timeout: 30000,
           },
         );
-        lastVersionContent = await parseContentVersion(result.body);
+        lastVersionContent = parseContentVersion(result.body);
       } catch (error) {}
 
       if (!lastVersionContent) {
@@ -326,31 +351,10 @@ export default class SystemService {
     return { code: 200 };
   }
 
-  public async reloadSystem(target: 'system' | 'data') {
+  public async reloadSystem(target?: 'system' | 'data') {
     const cmd = `real_time=true ql reload ${target || ''}`;
     const cp = spawn(cmd, { shell: '/bin/bash' });
-
-    cp.stdout.on('data', (data) => {
-      this.sockService.sendMessage({
-        type: 'reloadSystem',
-        message: data.toString(),
-      });
-    });
-
-    cp.stderr.on('data', (data) => {
-      this.sockService.sendMessage({
-        type: 'reloadSystem',
-        message: data.toString(),
-      });
-    });
-
-    cp.on('error', (err) => {
-      this.sockService.sendMessage({
-        type: 'reloadSystem',
-        message: JSON.stringify(err),
-      });
-    });
-
+    cp.unref();
     return { code: 200 };
   }
 
@@ -363,20 +367,15 @@ export default class SystemService {
     }
   }
 
-  public async run(
-    { command, logPath }: { command: string; logPath: string },
-    callback: TaskCallbacks,
-  ) {
+  public async run({ command }: { command: string }, callback: TaskCallbacks) {
     if (!command.startsWith(TASK_COMMAND)) {
       command = `${TASK_COMMAND} ${command}`;
     }
-    this.scheduleService.runTask(
-      `real_log_path=${logPath} real_time=true ${command}`,
-      callback,
-      {
-        command,
-      },
-    );
+    this.scheduleService.runTask(`real_time=true ${command}`, callback, {
+      command,
+      id: command.replace(/ /g, '-'),
+      runOrigin: 'system',
+    });
   }
 
   public async stop({ command, pid }: { command: string; pid: number }) {
@@ -403,9 +402,8 @@ export default class SystemService {
 
   public async exportData(res: Response) {
     try {
-      await tar.create(
-        { gzip: true, file: config.dataTgzFile, cwd: config.rootPath },
-        ['data'],
+      await promiseExec(
+        `cd ${config.dataPath} && cd ../ && tar -zcvf ${config.dataTgzFile} data/`,
       );
       res.download(config.dataTgzFile);
     } catch (error: any) {
@@ -416,16 +414,34 @@ export default class SystemService {
   public async importData() {
     try {
       await promiseExec(`rm -rf ${path.join(config.tmpPath, 'data')}`);
-      await tar.x({ file: config.dataTgzFile, cwd: config.tmpPath });
-      return { code: 200 };
+      const res = await promiseExec(
+        `cd ${config.tmpPath} && tar -zxvf ${config.dataTgzFile}`,
+      );
+      return { code: 200, data: res };
     } catch (error: any) {
       return { code: 400, message: error.message };
     }
   }
 
-  public async getSystemLog(res: Response) {
+  public async getSystemLog(
+    res: Response,
+    query: {
+      startTime?: string;
+      endTime?: string;
+    },
+  ) {
+    const startTime = dayjs(query.startTime || undefined)
+      .startOf('d')
+      .valueOf();
+    const endTime = dayjs(query.endTime || undefined)
+      .endOf('d')
+      .valueOf();
     const result = await readDirs(config.systemLogPath, config.systemLogPath);
-    const logs = result.reverse().filter((x) => x.title.endsWith('.log'));
+    const logs = result
+      .reverse()
+      .filter((x) => x.title.endsWith('.log'))
+      .filter((x) => x.mtime >= startTime && x.mtime <= endTime);
+
     res.set({
       'Content-Length': sum(logs.map((x) => x.size)),
     });
@@ -446,5 +462,13 @@ export default class SystemService {
         currentFileStream.pipe(res, { end: false });
       }
     })(res, logs);
+  }
+
+  public async deleteSystemLog() {
+    const result = await readDirs(config.systemLogPath, config.systemLogPath);
+    const logs = result.reverse().filter((x) => x.title.endsWith('.log'));
+    for (const log of logs) {
+      await rmPath(path.join(config.systemLogPath, log.title));
+    }
   }
 }
